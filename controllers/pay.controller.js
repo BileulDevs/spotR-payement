@@ -22,8 +22,8 @@ exports.createCheckoutSession = async (req, res) => {
         quantity: 1,
       }],
       mode: 'payment',
-      success_url: 'https://example.com/success',
-      cancel_url: 'https://example.com/cancel',
+      success_url: 'http://localhost:3009/payement/success',
+      cancel_url: 'http://localhost:3009/payement/error',
     });
 
     logger.info(`✅ Session Stripe créée : ${session.id}`);

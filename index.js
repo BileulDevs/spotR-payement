@@ -19,7 +19,7 @@ const init = async () => {
 
         app.listen(process.env.port, () => {
             console.log(`Listening on port: ${process.env.port}`);
-            logger.log("info", "Micro Service Notifs Started");
+            logger.log("info", "Micro Service Payement Started");
         });
 
     } catch (error) {
