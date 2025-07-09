@@ -10,7 +10,7 @@ exports.createCheckoutSession = async (req, res) => {
 
   try {
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
+      payment_method_types: ['card', 'paypal'],
       line_items: [{
         price_data: {
           currency: currency || 'eur',
@@ -41,7 +41,7 @@ exports.handleWebhook = (req, res) => {
   let event;
   try {
     event = stripe.webhooks.constructEvent(
-      req.rawBody,
+      req.body,
       sig,
       process.env.STRIPE_WEBHOOK_SECRET
     );
@@ -52,15 +52,18 @@ exports.handleWebhook = (req, res) => {
   }
 
   // Gestion des événements
+  console.log(event)
+
   switch (event.type) {
     case 'checkout.session.completed':
       const session = event.data.object;
       logger.info(`✅ Paiement complété. Session ID : ${session.id}`);
       // TODO : traitement métier ici
-      break;
 
-    default:
-      logger.warn(`⚠️ Événement non géré : ${event.type}`);
+
+      // SUB USER && AJOUTE A SON PAYMENT HISTORY ET INCREMENTER SUBCOUNT DU PLAN
+
+      break;
   }
 
   res.json({ received: true });
