@@ -74,8 +74,6 @@ exports.handleWebhook = async (req, res) => {
   }
 
   // Gestion des événements
-  console.log(event);
-
   try {
     switch (event.type) {
       case 'checkout.session.completed':
