@@ -5,7 +5,7 @@ require("dotenv").config();
 
 // Créer une session de paiement
 exports.createCheckoutSession = async (req, res) => {
-  const { amount, currency, productName, userId, premiumId, duration } = req.body;
+  const { amount, currency, productName, userId, premiumId, duration, userEmail } = req.body;
 
   logger.info(`💰 Demande de création de session : ${productName}, ${amount} ${currency}`);
 
@@ -36,7 +36,8 @@ exports.createCheckoutSession = async (req, res) => {
       metadata: {
         userId: userId,
         premiumId: premiumId,
-        duration: duration || '30' // Durée par défaut de 30 jours
+        duration: duration || '30',
+        userEmail: userEmail
       }
     });
 
@@ -54,7 +55,6 @@ exports.createCheckoutSession = async (req, res) => {
     });
   }
 };
-
 
 // Gérer les webhooks Stripe
 exports.handleWebhook = async (req, res) => {
@@ -81,7 +81,7 @@ exports.handleWebhook = async (req, res) => {
         logger.info(`✅ Paiement complété. Session ID : ${session.id}`);
         
         // Récupérer les métadonnées de la session
-        const { userId, premiumId, duration } = session.metadata;
+        const { userId, premiumId, duration, userEmail } = session.metadata;
         
         if (!userId || !premiumId) {
           logger.error('❌ Métadonnées manquantes dans la session Stripe');
@@ -112,7 +112,7 @@ exports.handleWebhook = async (req, res) => {
           autoRenew: true,
           paymentMethod: 'credit_card',
           transactionId: session.payment_intent || session.id,
-          amount: session.amount_total / 100, // Convertir de centimes en euros
+          amount: session.amount_total / 100,
           duration: parseInt(duration || 30)
         };
 
@@ -120,8 +120,46 @@ exports.handleWebhook = async (req, res) => {
         
         logger.info(`✅ Subscription créée avec succès pour l'utilisateur ${userId}`);
         
-        // TODO: Envoyer un email de confirmation à l'utilisateur
-        // TODO: Mettre à jour le statut premium de l'utilisateur
+        break;
+
+      case 'charge.updated':
+        const charge = event.data.object;
+        
+        // Vérifier si le charge est complété et qu'il y a un receipt_url
+        if (charge.status === 'succeeded' && charge.receipt_url) {
+          logger.info(`📧 Receipt URL généré pour le charge : ${charge.id}`);
+          
+          try {
+            // Récupérer la session de checkout associée via le payment_intent
+            const sessions = await stripe.checkout.sessions.list({
+              payment_intent: charge.payment_intent,
+              limit: 1
+            });
+            
+            if (sessions.data.length > 0) {
+              const relatedSession = sessions.data[0];
+              const { userEmail, premiumId } = relatedSession.metadata;
+              
+              if (userEmail && premiumId) {
+                // Récupérer les infos du premium
+                const premiumResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/premium/${premiumId}`);
+                const premium = premiumResponse.data;
+                
+                // Envoyer l'email de confirmation avec le reçu
+                await axios.post(`${process.env.SERVICE_MAILER_URL}/api/mailer/subscription`, {
+                  to: userEmail,
+                  receiptUrl: charge.receipt_url,
+                  username: '',
+                  plan: premium?.title || 'Premium'
+                });
+                
+                logger.info(`✅ Email d'abonnement envoyé à ${userEmail} avec le reçu`);
+              }
+            }
+          } catch (error) {
+            logger.error(`❌ Erreur lors de l'envoi de l'email : ${error.message}`);
+          }
+        }
         
         break;
 
