@@ -17,6 +17,8 @@
     "passport-twitter": "^1.0.4",
     "passport-twitter-oauth2": "^2.1.1",
     "stripe": "^18.1.0",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
     "twilio": "^5.6.0",
     "winston": "^3.17.0"
   },
