@@ -3,99 +3,41 @@ const stripe = require("../config/stripe");
 const axios = require('axios');
 require("dotenv").config();
 
+const getSubscriptionPrice = async (userId, premiumId) => {
+  const user = (await axios.get(`${process.env.SERVICE_BDD_URL}/api/users/${userId}`)).data;
+  const product = (await axios.get(`${process.env.SERVICE_BDD_URL}/api/premium/${premiumId}`)).data;
 
-// Securisation
+  let finalPrice = 0;
 
-//     const user = (await axios.get(`${process.env.SERVICE_BDD_URL}/api/users/${userId}`)).data;
-//     const product = (await axios.get(`${process.env.SERVICE_BDD_URL}/api/premium/${premiumId}`)).data;
-
-//     let finalPrice = 0;
-
-//     // Calcul du prix selon l'abonnement actuel
-//     if (user.subscription == null) {
-//         // Utilisateur sans abonnement - prix plein
-//         finalPrice = product.tarif;
-//     } else {
-//         // Utilisateur avec abonnement existant
-//         const currentSubscription = user.subscription;
+  if (user.subscription == null) {
+      finalPrice = product.tarif;
+  } else {
+    const currentSubscription = user.subscription;
+      
+    const isSubscriptionActive = currentSubscription.endDate && new Date(currentSubscription.endDate) > new Date();
+      
+    if (isSubscriptionActive) {
+        const currentPlan = currentSubscription.planId;
         
-//         // Vérifier si l'abonnement est encore actif
-//         const isSubscriptionActive = currentSubscription.endDate && 
-//             new Date(currentSubscription.endDate) > new Date();
-        
-//         if (isSubscriptionActive) {
-//             // Abonnement actif
-//             const currentPlan = currentSubscription.planId;
+        if (currentPlan === premiumId) {
+            finalPrice = product.tarif;
+        } else {
+            const currentPlanPrice = currentSubscription.price || 0;
+            const priceDifference = product.tarif - currentPlanPrice;
             
-//             if (currentPlan === premiumId) {
-//                 // Même plan - extension d'abonnement
-//                 finalPrice = product.tarif;
-//             } else {
-//                 // Changement de plan - calculer la différence proratée
-//                 const currentPlanPrice = currentSubscription.price || 0;
-//                 const priceDifference = product.tarif - currentPlanPrice;
-                
-//                 // Calculer le prorata basé sur le temps restant
-//                 const remainingDays = Math.ceil(
-//                     (new Date(currentSubscription.endDate) - new Date()) / (1000 * 60 * 60 * 24)
-//                 );
-//                 const totalDays = parseInt(duration) || 30;
-//                 const prorataFactor = remainingDays / totalDays;
-                
-//                 if (priceDifference > 0) {
-//                     // Upgrade - payer la différence proratée
-//                     finalPrice = priceDifference * prorataFactor;
-//                 } else {
-//                     // Downgrade - crédit appliqué, payer le nouveau prix
-//                     finalPrice = product.tarif;
-//                 }
-//             }
-//         } else {
-//             // Abonnement expiré - prix plein
-//             finalPrice = product.tarif;
-//         }
-//     }
+            if (priceDifference > 0) {
+                finalPrice = priceDifference;
+            } else {
+                finalPrice = product.tarif;
+            }
+        }
+    } else {
+        finalPrice = product.tarif;
+    }
+  }
 
-//     // S'assurer que le prix est en centimes pour Stripe
-//     finalPrice = Math.round(finalPrice * 100);
-
-//     const session = await stripe.checkout.sessions.create({
-//         payment_method_types: ['card', 'paypal'],
-//         line_items: [{
-//             price_data: {
-//                 currency: currency || 'eur',
-//                 product_data: {
-//                     name: product.title || 'Abonnement Premium'
-//                 },
-//                 unit_amount: finalPrice,
-//             },
-//             quantity: 1,
-//         }],
-//         mode: 'payment',
-//         success_url: 'http://localhost:3009/payement/success',
-//         cancel_url: 'http://localhost:3009/payement/error',
-//         metadata: {
-//             userId: userId,
-//             premiumId: premiumId,
-//             duration: duration || '30',
-//             userEmail: userEmail
-//         }
-//     });
-
-//     logger.info(`✅ Session Stripe créée : ${session.id} pour utilisateur ${userId}`);
-//     res.json({ 
-//       success: true,
-//       url: session.url,
-//       sessionId: session.id
-//     });
-//   } catch (error) {
-//     logger.error(`❌ Erreur création session Stripe : ${error.message}`);
-//     res.status(500).json({ 
-//       success: false,
-//       error: error.message 
-//     });
-//   }
-// };
+  return finalPrice;
+}
 
 // Créer une session de paiement
 exports.createCheckoutSession = async (req, res) => {
@@ -120,7 +62,7 @@ exports.createCheckoutSession = async (req, res) => {
           product_data: {
             name: productName || 'Abonnement Premium',
           },
-          unit_amount: amount,
+          unit_amount: await getSubscriptionPrice(userId, premiumId),
         },
         quantity: 1,
       }],
