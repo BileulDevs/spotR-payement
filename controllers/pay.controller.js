@@ -141,6 +141,7 @@ exports.handleWebhook = async (req, res) => {
       // Créer la subscription via le service BDD
       const subscriptionData = {
         userId,
+        premium: premium.id,
         premiumId,
         status: 'active',
         startDate,
@@ -148,18 +149,28 @@ exports.handleWebhook = async (req, res) => {
         autoRenew: true,
         paymentMethod: 'credit_card',
         transactionId: session.payment_intent || session.id,
-        amount: session.amount_total / 100,
+        amount: session.amount_total,
         duration: parseInt(duration || 30)
       };
-
-      const subscriptionResponse = await axios.post(`${process.env.SERVICE_BDD_URL}/api/subscription`, subscriptionData);
       
-      // ✨ NOUVELLE PARTIE : Mettre à jour les métadonnées du Payment Intent avec l'ID de subscription
+      const userResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/users/${userId}`);
+      const user = userResponse.data;
+
+      if(user.subscription != null) {
+        console.log("pput")
+        const subscriptionResponse = await axios.put(`${process.env.SERVICE_BDD_URL}/api/subscription/${user.subscription.id}`, subscriptionData);
+        console.log(subscriptionResponse)
+      } else {
+                console.log("post")
+        const subscriptionResponse = await axios.post(`${process.env.SERVICE_BDD_URL}/api/subscription`, subscriptionData);
+      }
+
+      
       if (session.payment_intent && subscriptionResponse.data?.id) {
         try {
           await stripe.paymentIntents.update(session.payment_intent, {
             metadata: {
-              ...session.metadata, // Conserver les métadonnées existantes
+              ...session.metadata,
               subscriptionId: subscriptionResponse.data.id.toString(),
               subscriptionStatus: 'active'
             }
@@ -199,8 +210,6 @@ exports.handleWebhook = async (req, res) => {
               username: '',
               plan: premium?.title || 'Premium'
             });
-
-            console.log("subscription ID:", subscriptionId);
 
             // ✅ CORRECTION : Utiliser la subscription ID des métadonnées
             await axios.put(`${process.env.SERVICE_BDD_URL}/api/subscription/${subscriptionId}`, {
