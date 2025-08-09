@@ -62,7 +62,7 @@ exports.createCheckoutSession = async (req, res) => {
           product_data: {
             name: productName || 'Abonnement Premium',
           },
-          unit_amount: await getSubscriptionPrice(userId, premiumId),
+          unit_amount: amount,
         },
         quantity: 1,
       }],
@@ -156,13 +156,12 @@ exports.handleWebhook = async (req, res) => {
       const userResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/users/${userId}`);
       const user = userResponse.data;
 
+      let subscriptionResponse;
+
       if(user.subscription != null) {
-        console.log("pput")
-        const subscriptionResponse = await axios.put(`${process.env.SERVICE_BDD_URL}/api/subscription/${user.subscription.id}`, subscriptionData);
-        console.log(subscriptionResponse)
+        subscriptionResponse = await axios.put(`${process.env.SERVICE_BDD_URL}/api/subscription/${user.subscription.id}`, subscriptionData);
       } else {
-                console.log("post")
-        const subscriptionResponse = await axios.post(`${process.env.SERVICE_BDD_URL}/api/subscription`, subscriptionData);
+        subscriptionResponse = await axios.post(`${process.env.SERVICE_BDD_URL}/api/subscription`, subscriptionData);
       }
 
       
@@ -233,9 +232,12 @@ exports.handleWebhook = async (req, res) => {
               if (sessionEmail && sessionPremiumId) {
                 // Récupérer la subscription via userId et status
                 const userResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/users/email/${sessionEmail}`);
+
+                console.log("data", userResponse.data)
                 if (userResponse.data) {
                   const subscriptions = await axios.get(`${process.env.SERVICE_BDD_URL}/api/subscription/user/${userResponse.data.id}?status=active`);
                   const activeSubscription = subscriptions.data?.[0];
+                  console.log("sub", subscriptions.data?.[0])
                   
                   if (activeSubscription) {
                     await axios.put(`${process.env.SERVICE_BDD_URL}/api/subscription/${activeSubscription.id}`, {
