@@ -10,47 +10,36 @@ const getSubscriptionPrice = async (userId, premiumId) => {
   let finalPrice = 0;
 
   if (user.subscription == null) {
-      finalPrice = product.tarif;
+    finalPrice = product.tarif;
   } else {
     const currentSubscription = user.subscription;
-      
     const isSubscriptionActive = currentSubscription.endDate && new Date(currentSubscription.endDate) > new Date();
-      
+
     if (isSubscriptionActive) {
-        const currentPlan = currentSubscription.planId;
-        
-        if (currentPlan === premiumId) {
-            finalPrice = product.tarif;
-        } else {
-            const currentPlanPrice = currentSubscription.price || 0;
-            const priceDifference = product.tarif - currentPlanPrice;
-            
-            if (priceDifference > 0) {
-                finalPrice = priceDifference;
-            } else {
-                finalPrice = product.tarif;
-            }
-        }
-    } else {
+      const currentPlan = currentSubscription.planId;
+      if (currentPlan === premiumId) {
         finalPrice = product.tarif;
+      } else {
+        const currentPlanPrice = currentSubscription.price || 0;
+        const priceDifference = product.tarif - currentPlanPrice;
+        finalPrice = priceDifference > 0 ? priceDifference : product.tarif;
+      }
+    } else {
+      finalPrice = product.tarif;
     }
   }
 
   return finalPrice;
 }
 
-// Créer une session de paiement
 exports.createCheckoutSession = async (req, res) => {
   const { amount, currency, productName, userId, premiumId, duration, userEmail } = req.body;
 
-  logger.info(`💰 Demande de création de session : ${productName}, ${amount} ${currency}`);
+  logger.info(`Création de session de paiement : ${productName}, ${amount} ${currency}`);
 
-  // Validation des paramètres requis
   if (!userId || !premiumId) {
-    return res.status(400).json({
-      success: false,
-      error: 'userId et premiumId sont requis pour créer une session de paiement'
-    });
+    logger.warn("Paramètres manquants pour la création de session");
+    return res.status(400).json({ success: false, error: 'userId et premiumId sont requis' });
   }
 
   try {
@@ -59,9 +48,7 @@ exports.createCheckoutSession = async (req, res) => {
       line_items: [{
         price_data: {
           currency: currency || 'eur',
-          product_data: {
-            name: productName || 'Abonnement Premium',
-          },
+          product_data: { name: productName || 'Abonnement Premium' },
           unit_amount: amount,
         },
         quantity: 1,
@@ -69,266 +56,171 @@ exports.createCheckoutSession = async (req, res) => {
       mode: 'payment',
       success_url: 'http://localhost:3009/payement/success',
       cancel_url: 'http://localhost:3009/payement/error',
-      metadata: {
-        userId: userId,
-        premiumId: premiumId,
-        duration: duration || '30',
-        userEmail: userEmail
-      }
+      metadata: { userId, premiumId, duration: duration || '30', userEmail }
     });
 
-    logger.info(`✅ Session Stripe créée : ${session.id} pour utilisateur ${userId}`);
-    res.json({ 
-      success: true,
-      url: session.url,
-      sessionId: session.id
-    });
+    logger.info(`Session Stripe ${session.id} créée pour utilisateur ${userId}`);
+    res.json({ success: true, url: session.url, sessionId: session.id });
   } catch (error) {
-    logger.error(`❌ Erreur création session Stripe : ${error.message}`);
-    res.status(500).json({ 
-      success: false,
-      error: error.message 
-    });
+    logger.error(`Erreur création session Stripe : ${error.message}`);
+    res.status(500).json({ success: false, error: error.message });
   }
 };
 
-// Gérer les webhooks Stripe
 exports.handleWebhook = async (req, res) => {
   const sig = req.headers['stripe-signature'];
-
   let event;
+
   try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-    logger.info(`📩 Webhook Stripe reçu : ${event.type}`);
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    logger.info(`Webhook Stripe reçu : ${event.type}`);
   } catch (err) {
-    logger.error(`❌ Webhook invalide : ${err.message}`);
+    logger.error(`Webhook invalide : ${err.message}`);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // Gestion des événements
   try {
-  switch (event.type) {
-    case 'checkout.session.completed':
-      const session = event.data.object;
-      logger.info(`✅ Paiement complété. Session ID : ${session.id}`);
-      
-      // Récupérer les métadonnées de la session
-      const { userId, premiumId, duration, userEmail } = session.metadata;
-      
-      if (!userId || !premiumId) {
-        logger.error('❌ Métadonnées manquantes dans la session Stripe');
-        break;
-      }
+    switch (event.type) {
+      case 'checkout.session.completed':
+        const session = event.data.object;
+        logger.info(`Paiement complété. Session ID : ${session.id}`);
 
-      // Vérifier si le premium existe via le service BDD
-      const premiumResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/premium/${premiumId}`);
-      if (!premiumResponse.data) {
-        logger.error(`❌ Premium non trouvé : ${premiumId}`);
-        break;
-      }
-
-      const premium = premiumResponse.data;
-
-      // Calculer les dates de subscription
-      const startDate = new Date();
-      const endDate = new Date(startDate);
-      endDate.setDate(endDate.getDate() + parseInt(duration || 30));
-
-      // Créer la subscription via le service BDD
-      const subscriptionData = {
-        userId,
-        premium: premium.id,
-        premiumId,
-        status: 'active',
-        startDate,
-        endDate,
-        autoRenew: true,
-        paymentMethod: 'credit_card',
-        transactionId: session.payment_intent || session.id,
-        amount: session.amount_total,
-        duration: parseInt(duration || 30)
-      };
-      
-      const userResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/users/${userId}`);
-      const user = userResponse.data;
-
-      let subscriptionResponse;
-
-      if(user.subscription != null) {
-        subscriptionResponse = await axios.put(`${process.env.SERVICE_BDD_URL}/api/subscription/${user.subscription.id}`, subscriptionData);
-      } else {
-        subscriptionResponse = await axios.post(`${process.env.SERVICE_BDD_URL}/api/subscription`, subscriptionData);
-      }
-
-      
-      if (session.payment_intent && subscriptionResponse.data?.id) {
-        try {
-          await stripe.paymentIntents.update(session.payment_intent, {
-            metadata: {
-              ...session.metadata,
-              subscriptionId: subscriptionResponse.data.id.toString(),
-              subscriptionStatus: 'active'
-            }
-          });
-          
-          logger.info(`✅ Métadonnées du Payment Intent ${session.payment_intent} mises à jour avec subscription ID : ${subscriptionResponse.data.id}`);
-        } catch (metadataError) {
-          logger.error(`❌ Erreur lors de la mise à jour des métadonnées : ${metadataError.message}`);
+        const { userId, premiumId, duration, userEmail } = session.metadata;
+        if (!userId || !premiumId) {
+          logger.error('Métadonnées manquantes dans la session Stripe');
+          break;
         }
-      }
-      
-      logger.info(`✅ Subscription créée avec succès pour l'utilisateur ${userId}`);
-      
-      break;
 
-    case 'charge.updated':
-      const charge = event.data.object;
-      
-      // Vérifier si le charge est complété et qu'il y a un receipt_url
-      if (charge.status === 'succeeded' && charge.receipt_url) {
-        logger.info(`📧 Receipt URL généré pour le charge : ${charge.id}`);
-        
-        try {
-          // Récupérer le Payment Intent pour obtenir les métadonnées mises à jour
-          const paymentIntent = await stripe.paymentIntents.retrieve(charge.payment_intent);
-          const { userEmail, premiumId, subscriptionId } = paymentIntent.metadata;
-          
-          if (userEmail && premiumId && subscriptionId) {
-            // Récupérer les infos du premium
-            const premiumResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/premium/${premiumId}`);
-            const premium = premiumResponse.data;
-            
-            // Envoyer l'email de confirmation avec le reçu
-            await axios.post(`${process.env.SERVICE_MAILER_URL}/api/mailer/subscription`, {
-              to: userEmail,
-              receiptUrl: charge.receipt_url,
-              username: '',
-              plan: premium?.title || 'Premium'
-            });
+        const premiumResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/premium/${premiumId}`);
+        if (!premiumResponse.data) {
+          logger.error(`Premium non trouvé : ${premiumId}`);
+          break;
+        }
 
-            // ✅ CORRECTION : Utiliser la subscription ID des métadonnées
-            await axios.put(`${process.env.SERVICE_BDD_URL}/api/subscription/${subscriptionId}`, {
-              factureUrl: charge.receipt_url // ✅ Correction du typo "fatcureUrl"
-            });
-            
-            logger.info(`✅ Email d'abonnement envoyé à ${userEmail} avec le reçu. Subscription ${subscriptionId} mise à jour.`);
-          } else {
-            logger.warn(`⚠️ Métadonnées manquantes dans le Payment Intent. userEmail: ${userEmail}, premiumId: ${premiumId}, subscriptionId: ${subscriptionId}`);
-            
-            // Fallback : essayer avec l'ancienne méthode si les nouvelles métadonnées ne sont pas disponibles
-            const sessions = await stripe.checkout.sessions.list({
-              payment_intent: charge.payment_intent,
-              limit: 1
-            });
-            
-            if (sessions.data.length > 0) {
-              const relatedSession = sessions.data[0];
-              const { userEmail: sessionEmail, premiumId: sessionPremiumId } = relatedSession.metadata;
-              
-              if (sessionEmail && sessionPremiumId) {
-                // Récupérer la subscription via userId et status
-                const userResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/users/email/${sessionEmail}`);
+        const premium = premiumResponse.data;
+        const startDate = new Date();
+        const endDate = new Date(startDate);
+        endDate.setDate(endDate.getDate() + parseInt(duration || 30));
 
-                console.log("data", userResponse.data)
-                if (userResponse.data) {
-                  const subscriptions = await axios.get(`${process.env.SERVICE_BDD_URL}/api/subscription/user/${userResponse.data.id}?status=active`);
-                  const activeSubscription = subscriptions.data?.[0];
-                  console.log("sub", subscriptions.data?.[0])
-                  
-                  if (activeSubscription) {
-                    await axios.put(`${process.env.SERVICE_BDD_URL}/api/subscription/${activeSubscription.id}`, {
-                      factureUrl: charge.receipt_url
-                    });
-                    logger.info(`✅ Subscription ${activeSubscription.id} mise à jour via fallback`);
-                  }
-                }
-              }
-            }
+        const subscriptionData = {
+          userId,
+          premium: premium.id,
+          premiumId,
+          status: 'active',
+          startDate,
+          endDate,
+          autoRenew: true,
+          paymentMethod: 'credit_card',
+          transactionId: session.payment_intent || session.id,
+          amount: session.amount_total,
+          duration: parseInt(duration || 30)
+        };
+
+        const userResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/users/${userId}`);
+        const user = userResponse.data;
+        let subscriptionResponse;
+
+        if (user.subscription != null) {
+          subscriptionResponse = await axios.put(`${process.env.SERVICE_BDD_URL}/api/subscription/${user.subscription.id}`, subscriptionData);
+        } else {
+          subscriptionResponse = await axios.post(`${process.env.SERVICE_BDD_URL}/api/subscription`, subscriptionData);
+        }
+
+        if (session.payment_intent && subscriptionResponse.data?.id) {
+          try {
+            await stripe.paymentIntents.update(session.payment_intent, {
+              metadata: { ...session.metadata, subscriptionId: subscriptionResponse.data.id.toString(), subscriptionStatus: 'active' }
+            });
+            logger.info(`Métadonnées Payment Intent ${session.payment_intent} mises à jour avec subscription ID : ${subscriptionResponse.data.id}`);
+          } catch (metadataError) {
+            logger.warn(`Erreur mise à jour métadonnées : ${metadataError.message}`);
           }
-        } catch (error) {
-          logger.error(`❌ Erreur lors de l'envoi de l'email : ${error.message}`);
         }
-      }
-      
-      break;
+
+        logger.info(`Subscription créée pour l'utilisateur ${userId}`);
+        break;
+
+      case 'charge.updated':
+        const charge = event.data.object;
+        if (charge.status === 'succeeded' && charge.receipt_url) {
+          logger.info(`Receipt URL généré pour charge ${charge.id}`);
+          try {
+            const paymentIntent = await stripe.paymentIntents.retrieve(charge.payment_intent);
+            const { userEmail, premiumId, subscriptionId } = paymentIntent.metadata;
+
+            if (userEmail && premiumId && subscriptionId) {
+              const premiumResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/premium/${premiumId}`);
+              const premium = premiumResponse.data;
+
+              await axios.post(`${process.env.SERVICE_MAILER_URL}/api/mailer/subscription`, {
+                to: userEmail,
+                receiptUrl: charge.receipt_url,
+                username: '',
+                plan: premium?.title || 'Premium'
+              });
+
+              await axios.put(`${process.env.SERVICE_BDD_URL}/api/subscription/${subscriptionId}`, { factureUrl: charge.receipt_url });
+              logger.info(`Email envoyé à ${userEmail} et subscription ${subscriptionId} mise à jour`);
+            } else {
+              logger.warn(`Métadonnées manquantes dans Payment Intent. userEmail: ${userEmail}, premiumId: ${premiumId}, subscriptionId: ${subscriptionId}`);
+            }
+          } catch (error) {
+            logger.error(`Erreur envoi email : ${error.message}`);
+          }
+        }
+        break;
+
       case 'invoice.payment_succeeded':
         const invoice = event.data.object;
-        logger.info(`✅ Paiement de facture réussi. Invoice ID : ${invoice.id}`);
-        
-        // Traiter le renouvellement automatique
-        if (invoice.subscription) {
-          await handleSubscriptionRenewal(invoice);
-        }
-        
+        logger.info(`Paiement facture réussi. Invoice ID : ${invoice.id}`);
+        if (invoice.subscription) await handleSubscriptionRenewal(invoice);
         break;
 
       case 'invoice.payment_failed':
         const failedInvoice = event.data.object;
-        logger.warn(`⚠️ Échec du paiement de facture. Invoice ID : ${failedInvoice.id}`);
-        
-        // Traiter l'échec de paiement
+        logger.warn(`Échec paiement facture. Invoice ID : ${failedInvoice.id}`);
         await handlePaymentFailure(failedInvoice);
-        
         break;
 
       case 'customer.subscription.deleted':
         const deletedSubscription = event.data.object;
-        logger.info(`🗑️ Subscription Stripe supprimée : ${deletedSubscription.id}`);
-        
-        // Marquer la subscription comme annulée
+        logger.info(`Subscription supprimée : ${deletedSubscription.id}`);
         await handleSubscriptionCancellation(deletedSubscription);
-        
         break;
 
       case 'customer.subscription.updated':
         const updatedSubscription = event.data.object;
-        logger.info(`🔄 Subscription Stripe mise à jour : ${updatedSubscription.id}`);
-        
-        // Mettre à jour le statut de la subscription
+        logger.info(`Subscription mise à jour : ${updatedSubscription.id}`);
         await handleSubscriptionUpdate(updatedSubscription);
-        
         break;
 
       default:
-        logger.info(`🔍 Événement non traité : ${event.type}`);
-    
+        logger.info(`Événement non géré : ${event.type}`);
     }
   } catch (error) {
-    logger.error(`❌ Erreur lors du traitement du webhook : ${error.message}`);
-    return res.status(500).json({ error: 'Erreur interne du serveur' });
+    logger.error(`Erreur traitement webhook : ${error.message}`);
+    return res.status(500).json({ error: 'Erreur interne serveur' });
   }
 
   res.json({ received: true });
 };
 
-// Fonction pour gérer le renouvellement automatique
 async function handleSubscriptionRenewal(invoice) {
   try {
-    // Rechercher la subscription par transaction ID via le service BDD
     const searchResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/subscription/search`, {
       params: { transactionId: invoice.subscription }
     });
 
     if (searchResponse.data.success && searchResponse.data.data.subscriptions.length > 0) {
       const subscription = searchResponse.data.data.subscriptions[0];
-      
-      // Renouveler la subscription via le service BDD
-      await axios.patch(`${process.env.SERVICE_BDD_URL}/api/subscription/${subscription.id}/renew`, {
-        duration: 30
-      });
-
-      logger.info(`✅ Subscription renouvelée pour l'utilisateur ${subscription.userId}`);
+      await axios.patch(`${process.env.SERVICE_BDD_URL}/api/subscription/${subscription.id}/renew`, { duration: 30 });
+      logger.info(`Subscription renouvelée pour utilisateur ${subscription.userId}`);
     }
   } catch (error) {
-    logger.error(`❌ Erreur lors du renouvellement : ${error.message}`);
+    logger.error(`Erreur renouvellement : ${error.message}`);
   }
 }
 
-// Fonction pour gérer l'échec de paiement
 async function handlePaymentFailure(invoice) {
   try {
     const searchResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/subscription/search`, {
@@ -337,23 +229,14 @@ async function handlePaymentFailure(invoice) {
 
     if (searchResponse.data.success && searchResponse.data.data.subscriptions.length > 0) {
       const subscription = searchResponse.data.data.subscriptions[0];
-      
-      // Marquer comme inactive via le service BDD
-      await axios.patch(`${process.env.SERVICE_BDD_URL}/api/subscription/${subscription.id}`, {
-        status: 'inactive',
-        autoRenew: false
-      });
-
-      logger.warn(`⚠️ Subscription désactivée pour échec de paiement : ${subscription.userId}`);
-      
-      // TODO: Envoyer un email d'alerte à l'utilisateur
+      await axios.patch(`${process.env.SERVICE_BDD_URL}/api/subscription/${subscription.id}`, { status: 'inactive', autoRenew: false });
+      logger.warn(`Subscription désactivée pour échec de paiement : ${subscription.userId}`);
     }
   } catch (error) {
-    logger.error(`❌ Erreur lors du traitement de l'échec : ${error.message}`);
+    logger.error(`Erreur échec paiement : ${error.message}`);
   }
 }
 
-// Fonction pour gérer l'annulation de subscription
 async function handleSubscriptionCancellation(stripeSubscription) {
   try {
     const searchResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/subscription/search`, {
@@ -362,18 +245,14 @@ async function handleSubscriptionCancellation(stripeSubscription) {
 
     if (searchResponse.data.success && searchResponse.data.data.subscriptions.length > 0) {
       const subscription = searchResponse.data.data.subscriptions[0];
-      
-      // Annuler la subscription via le service BDD
       await axios.patch(`${process.env.SERVICE_BDD_URL}/api/subscription/${subscription.id}/cancel`);
-
-      logger.info(`✅ Subscription annulée pour l'utilisateur ${subscription.userId}`);
+      logger.info(`Subscription annulée pour utilisateur ${subscription.userId}`);
     }
   } catch (error) {
-    logger.error(`❌ Erreur lors de l'annulation : ${error.message}`);
+    logger.error(`Erreur annulation : ${error.message}`);
   }
 }
 
-// Fonction pour gérer la mise à jour de subscription
 async function handleSubscriptionUpdate(stripeSubscription) {
   try {
     const searchResponse = await axios.get(`${process.env.SERVICE_BDD_URL}/api/subscription/search`, {
@@ -382,34 +261,14 @@ async function handleSubscriptionUpdate(stripeSubscription) {
 
     if (searchResponse.data.success && searchResponse.data.data.subscriptions.length > 0) {
       const subscription = searchResponse.data.data.subscriptions[0];
-      
-      // Déterminer le nouveau statut basé sur le statut Stripe
       let newStatus = 'active';
-      if (stripeSubscription.status === 'canceled') {
-        newStatus = 'cancelled';
-      } else if (stripeSubscription.status === 'past_due') {
-        newStatus = 'inactive';
-      }
-      
-      // Mettre à jour via le service BDD
-      await axios.patch(`${process.env.SERVICE_BDD_URL}/api/subscription/${subscription.id}`, {
-        status: newStatus
-      });
+      if (stripeSubscription.status === 'canceled') newStatus = 'cancelled';
+      else if (stripeSubscription.status === 'past_due') newStatus = 'inactive';
 
-      logger.info(`✅ Subscription mise à jour pour l'utilisateur ${subscription.userId} - Statut: ${newStatus}`);
+      await axios.patch(`${process.env.SERVICE_BDD_URL}/api/subscription/${subscription.id}`, { status: newStatus });
+      logger.info(`Subscription mise à jour pour utilisateur ${subscription.userId} - Statut: ${newStatus}`);
     }
   } catch (error) {
-    logger.error(`❌ Erreur lors de la mise à jour : ${error.message}`);
-  }
-}
-
-// Fonction utilitaire pour gérer les erreurs d'API
-function handleApiError(error, operation) {
-  if (error.response) {
-    logger.error(`❌ Erreur API ${operation}: ${error.response.status} - ${error.response.data.message || error.response.data}`);
-  } else if (error.request) {
-    logger.error(`❌ Erreur réseau ${operation}: Service BDD non disponible`);
-  } else {
-    logger.error(`❌ Erreur ${operation}: ${error.message}`);
+    logger.error(`Erreur mise à jour subscription : ${error.message}`);
   }
 }
