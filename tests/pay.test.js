@@ -39,26 +39,32 @@ describe('createCheckoutSession', () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      error: 'userId et premiumId sont requis pour créer une session de paiement',
+      error:
+        'userId et premiumId sont requis pour créer une session de paiement',
     });
   });
 
   it('should create a Stripe session and return session info', async () => {
-    const mockSession = { id: 'sess_123', url: 'https://checkout.stripe.com/pay/sess_123' };
+    const mockSession = {
+      id: 'sess_123',
+      url: 'https://checkout.stripe.com/pay/sess_123',
+    };
     stripe.checkout.sessions.create.mockResolvedValue(mockSession);
 
     await createCheckoutSession(req, res);
 
     expect(stripe.checkout.sessions.create).toHaveBeenCalledWith({
       payment_method_types: ['card', 'paypal'],
-      line_items: [{
-        price_data: {
-          currency: 'eur',
-          product_data: { name: 'Test Product' },
-          unit_amount: 5000,
+      line_items: [
+        {
+          price_data: {
+            currency: 'eur',
+            product_data: { name: 'Test Product' },
+            unit_amount: 5000,
+          },
+          quantity: 1,
         },
-        quantity: 1,
-      }],
+      ],
       mode: 'payment',
       success_url: 'http://localhost:3009/payement/success',
       cancel_url: 'http://localhost:3009/payement/error',
@@ -70,8 +76,12 @@ describe('createCheckoutSession', () => {
       },
     });
 
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('Demande de création de session'));
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('Session Stripe créée'));
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('Demande de création de session')
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('Session Stripe créée')
+    );
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       url: mockSession.url,
@@ -85,7 +95,9 @@ describe('createCheckoutSession', () => {
 
     await createCheckoutSession(req, res);
 
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Erreur création session Stripe'));
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('Erreur création session Stripe')
+    );
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
