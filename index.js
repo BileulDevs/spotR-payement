@@ -12,9 +12,9 @@ const app = express();
 const swaggerDefinition = {
   openapi: '3.0.0',
   info: {
-    title: 'API Auth',
+    title: 'API Payement',
     version: '1.0.0',
-    description: 'API Micro Service Auth',
+    description: 'API Micro Service Payement',
   },
 };
 
